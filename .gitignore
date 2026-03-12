@@ -1,0 +1,33 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# PyCharm
+.idea/
+
+# Model checkpoints (too large for GitHub)
+checkpoints/
+*.bin
+*.safetensors
+*.pt
+
+# Hugging Face cache
+~/.cache/
+
+# Data files (too large)
+data/*.json
+data/*.csv
+data/*.parquet
+
+# Results (keep the JSON but not large files)
+results/*.png
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# macOS
+.DS_Store
