@@ -68,6 +68,7 @@ def run_smoke_test():
     print("\n🤖 Step 2: Loading model...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.model_max_length = MAX_SEQ_LENGTH
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
@@ -111,13 +112,16 @@ def run_smoke_test():
         dataloader_num_workers=0,
     )
 
+    def formatting_func(example):
+        return example["text"]
+
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=split["train"].select_columns(["text"]),
         eval_dataset=split["test"].select_columns(["text"]),
         processing_class=tokenizer,
-        max_seq_length=MAX_SEQ_LENGTH,
+        formatting_func=formatting_func,
     )
 
     trainer.train()
@@ -203,10 +207,24 @@ def run_smoke_test():
     # Save smoke results
     smoke_results_path = os.path.join(RESULTS_DIR, "smoke_test_results.json")
     os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    def make_serializable(obj):
+        """Convert numpy/torch types to native Python types for JSON."""
+        if isinstance(obj, dict):
+            return {k: make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [make_serializable(v) for v in obj]
+        elif hasattr(obj, 'item'):  # catches numpy float32, int64 etc.
+            return obj.item()
+        else:
+            return obj
+
     with open(smoke_results_path, "w") as f:
         json.dump(
-            [{k: v for k, v in r.items() if k != "details"}
-             for r in all_results],
+            make_serializable(
+                [{k: v for k, v in r.items() if k != "details"}
+                 for r in all_results]
+            ),
             f, indent=2
         )
 

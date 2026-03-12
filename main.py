@@ -55,6 +55,7 @@ def load_model_and_tokenizer():
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.model_max_length = MAX_SEQ_LENGTH
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
@@ -105,13 +106,16 @@ def fine_tune(model, tokenizer, dataset_split):
         dataloader_num_workers=0,
     )
 
+    def formatting_func(example):
+        return example["text"]
+
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=dataset_split["train"].select_columns(["text"]),
         eval_dataset=dataset_split["test"].select_columns(["text"]),
         processing_class=tokenizer,
-        max_seq_length=MAX_SEQ_LENGTH,
+        formatting_func=formatting_func,
         peft_config=None,
     )
 
@@ -176,8 +180,20 @@ def evaluate_all_checkpoints(tokenizer):
         {k: v for k, v in r.items() if k != "details"}
         for r in all_results
     ]
+
+    def make_serializable(obj):
+        """Convert numpy/torch types to native Python types for JSON."""
+        if isinstance(obj, dict):
+            return {k: make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [make_serializable(v) for v in obj]
+        elif hasattr(obj, 'item'):
+            return obj.item()
+        else:
+            return obj
+
     with open(results_path, "w") as f:
-        json.dump(results_to_save, f, indent=2)
+        json.dump(make_serializable(results_to_save), f, indent=2)
     print(f"\n✅ Results saved to {results_path}")
 
     return all_results

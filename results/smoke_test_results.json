@@ -1,0 +1,14 @@
+[
+  {
+    "step": 0,
+    "refusal_rate": 1.0,
+    "jailbreak_asr": 0.0,
+    "avg_toxicity": 0.0005868612206541002
+  },
+  {
+    "step": 6,
+    "refusal_rate": 1.0,
+    "jailbreak_asr": 0.0,
+    "avg_toxicity": 0.0005868612206541002
+  }
+]
