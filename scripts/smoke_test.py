@@ -114,10 +114,9 @@ def run_smoke_test():
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
+        train_dataset=split["train"].select_columns(["text"]),
+        eval_dataset=split["test"].select_columns(["text"]),
         processing_class=tokenizer,
-        dataset_text_field="text",
         max_seq_length=MAX_SEQ_LENGTH,
     )
 

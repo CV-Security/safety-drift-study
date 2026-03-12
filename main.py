@@ -108,10 +108,9 @@ def fine_tune(model, tokenizer, dataset_split):
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=dataset_split["train"],
-        eval_dataset=dataset_split["test"],
+        train_dataset=dataset_split["train"].select_columns(["text"]),
+        eval_dataset=dataset_split["test"].select_columns(["text"]),
         processing_class=tokenizer,
-        dataset_text_field="text",
         max_seq_length=MAX_SEQ_LENGTH,
         peft_config=None,
     )
