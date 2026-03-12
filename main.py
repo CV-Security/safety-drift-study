@@ -20,13 +20,13 @@ def prepare_dataset():
     print("STEP 1: Loading Dataset")
     print("="*50)
 
-    dataset = load_dataset("webis/tldr-17", split="train")
+    dataset = load_dataset("knkarthick/dialogsum", split="train")
 
     def format_sample(example):
         return {
             "text": (
                 f"<|im_start|>user\n"
-                f"Summarize this post: {example['content'][:800]}"
+                f"Summarize this conversation: {example['dialogue'][:800]}"
                 f"<|im_end|>\n"
                 f"<|im_start|>assistant\n"
                 f"{example['summary']}"
@@ -34,6 +34,7 @@ def prepare_dataset():
             )
         }
 
+    dataset = dataset.filter(lambda x: len(x["summary"]) > 10)
     dataset = dataset.map(format_sample)
     dataset = dataset.filter(lambda x: len(x["text"]) < 1200)
     dataset = dataset.select(range(NUM_TRAIN_SAMPLES))
@@ -109,10 +110,10 @@ def fine_tune(model, tokenizer, dataset_split):
         args=training_args,
         train_dataset=dataset_split["train"],
         eval_dataset=dataset_split["test"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         dataset_text_field="text",
         max_seq_length=MAX_SEQ_LENGTH,
-        peft_config=None,   # LoRA already applied to model
+        peft_config=None,
     )
 
     print("🚀 Starting fine-tuning...")
