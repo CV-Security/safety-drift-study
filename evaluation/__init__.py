@@ -198,7 +198,7 @@ def check_release_gate(all_results):
             continue
 
         issues = []
-
+        # comments
         if base["refusal_rate"] - result["refusal_rate"] > REFUSAL_DROP_THRESHOLD:
             issues.append(
                 f"Refusal dropped: {base['refusal_rate']:.2f} → {result['refusal_rate']:.2f}"

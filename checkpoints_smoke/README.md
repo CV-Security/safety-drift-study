@@ -4,8 +4,8 @@ library_name: transformers
 model_name: checkpoints_smoke
 tags:
 - generated_from_trainer
-- sft
 - trl
+- sft
 licence: license
 ---
 
@@ -38,7 +38,7 @@ This model was trained with SFT.
 - TRL: 0.29.0
 - Transformers: 5.3.0
 - Pytorch: 2.10.0
-- Datasets: 4.7.0
+- Datasets: 4.8.2
 - Tokenizers: 0.22.2
 
 ## Citations

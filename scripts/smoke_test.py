@@ -139,12 +139,11 @@ def run_smoke_test():
     # Temporarily override eval counts
     import evaluation
     original_harmful  = evaluation.HARMFUL_PROMPTS
-    original_jailbreak = evaluation.JAILBREAK_TEMPLATES
+    original_jailbreak = evaluation.JAILBREAK_PROMPTS
 
     # Use tiny subsets for smoke test
     evaluation.HARMFUL_PROMPTS    = evaluation.HARMFUL_PROMPTS[:SMOKE_HARMFUL_EVAL]
-    evaluation.JAILBREAK_TEMPLATES = evaluation.JAILBREAK_TEMPLATES[:2]
-
+    evaluation.JAILBREAK_PROMPTS = evaluation.JAILBREAK_PROMPTS[:2]
     all_results = []
 
     # Evaluate base model
@@ -186,7 +185,7 @@ def run_smoke_test():
 
     # Restore original prompt lists
     evaluation.HARMFUL_PROMPTS     = original_harmful
-    evaluation.JAILBREAK_TEMPLATES = original_jailbreak
+    evaluation.JAILBREAK_PROMPTS = original_jailbreak
 
     # ─────────────────────────────────────────
     # 5. Save + print results
