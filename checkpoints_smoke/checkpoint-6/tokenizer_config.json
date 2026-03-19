@@ -22,7 +22,7 @@
   ],
   "is_local": false,
   "model_max_length": 512,
-  "pad_token": "<|im_end|>",
+  "pad_token": "<|endoftext|>",
   "split_special_tokens": false,
   "tokenizer_class": "Qwen2Tokenizer",
   "unk_token": null
