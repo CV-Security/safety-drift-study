@@ -8,58 +8,87 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from trl import SFTTrainer
 from datasets import load_dataset
-from config import *
+from config import (
+    get_config, MODELS, DATASETS, get_experiment_dirs,
+    NUM_TRAIN_SAMPLES, MAX_SEQ_LENGTH, BATCH_SIZE,
+    GRAD_ACCUM_STEPS, LEARNING_RATE, NUM_EPOCHS,
+    SAVE_STEPS, SAVE_TOTAL_LIMIT, LORA_R, LORA_ALPHA,
+    LORA_DROPOUT, LORA_TARGET_MODULES, DEVICE,
+    DATALOADER_PIN_MEMORY
+)
 from evaluation import evaluate_checkpoint, check_release_gate
 
 
+def make_serializable(obj):
+    """Convert numpy/torch types to native Python for JSON."""
+    if isinstance(obj, dict):
+        return {k: make_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_serializable(v) for v in obj]
+    elif hasattr(obj, "item"):
+        return obj.item()
+    return obj
+
+
 # ─────────────────────────────────────────────
-# STEP 1: Load and prepare dataset
+# STEP 1: Load Dataset
 # ─────────────────────────────────────────────
-def prepare_dataset():
+def prepare_dataset(dataset_key):
     print("\n" + "="*50)
-    print("STEP 1: Loading Dataset")
+    print(f"STEP 1: Loading Dataset — {dataset_key}")
     print("="*50)
 
-    dataset = load_dataset("knkarthick/dialogsum", split="train")
+    ds_config = DATASETS[dataset_key]
+    text_col  = ds_config["text_col"]
+    sum_col   = ds_config["summary_col"]
+    prompt    = ds_config["prompt"]
+
+    dataset = load_dataset(ds_config["path"], split="train")
+    dataset = dataset.filter(lambda x: len(x[sum_col]) > 10)
 
     def format_sample(example):
         return {
             "text": (
                 f"<|im_start|>user\n"
-                f"Summarize this conversation: {example['dialogue'][:800]}"
+                f"{prompt} {example[text_col][:800]}"
                 f"<|im_end|>\n"
                 f"<|im_start|>assistant\n"
-                f"{example['summary']}"
+                f"{example[sum_col]}"
                 f"<|im_end|>"
             )
         }
 
-    dataset = dataset.filter(lambda x: len(x["summary"]) > 10)
     dataset = dataset.map(format_sample)
     dataset = dataset.filter(lambda x: len(x["text"]) < 1200)
-    dataset = dataset.select(range(NUM_TRAIN_SAMPLES))
-    split = dataset.train_test_split(test_size=0.1, seed=42)
 
+    if len(dataset) > NUM_TRAIN_SAMPLES:
+        dataset = dataset.select(range(NUM_TRAIN_SAMPLES))
+
+    split = dataset.train_test_split(test_size=0.1, seed=42)
     print(f"✅ Train samples : {len(split['train'])}")
     print(f"✅ Val samples   : {len(split['test'])}")
     return split
 
 
 # ─────────────────────────────────────────────
-# STEP 2: Load base model + apply LoRA
+# STEP 2: Load Model + LoRA
 # ─────────────────────────────────────────────
-def load_model_and_tokenizer():
+def load_model_and_tokenizer(model_key):
     print("\n" + "="*50)
-    print("STEP 2: Loading Model")
+    print(f"STEP 2: Loading Model — {model_key}")
     print("="*50)
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    tokenizer.pad_token = tokenizer.eos_token
+    model_config = MODELS[model_key]
+    model_name   = model_config["path"]
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     tokenizer.model_max_length = MAX_SEQ_LENGTH
 
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float16,
+        model_name,
+        dtype=torch.float16,
         device_map=DEVICE
     )
 
@@ -75,21 +104,26 @@ def load_model_and_tokenizer():
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    print(f"✅ Model loaded  : {MODEL_NAME}")
-    print(f"✅ Device        : {DEVICE}")
-    return model, tokenizer
+    print(f"✅ Model   : {model_name}")
+    print(f"✅ Family  : {model_config['family']}")
+    print(f"✅ Size    : {model_config['size']}")
+    print(f"✅ Device  : {DEVICE}")
+    return model, tokenizer, model_name
 
 
 # ─────────────────────────────────────────────
-# STEP 3: Fine-tune with checkpoint saving
+# STEP 3: Fine-Tune
 # ─────────────────────────────────────────────
-def fine_tune(model, tokenizer, dataset_split):
+def fine_tune(model, tokenizer, dataset_split, checkpoint_dir):
     print("\n" + "="*50)
     print("STEP 3: Fine-Tuning")
     print("="*50)
 
+    def formatting_func(example):
+        return example["text"]
+
     training_args = TrainingArguments(
-        output_dir=CHECKPOINT_DIR,
+        output_dir=checkpoint_dir,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         gradient_accumulation_steps=GRAD_ACCUM_STEPS,
@@ -104,10 +138,8 @@ def fine_tune(model, tokenizer, dataset_split):
         logging_steps=50,
         report_to="none",
         dataloader_num_workers=0,
+        dataloader_pin_memory=DATALOADER_PIN_MEMORY,
     )
-
-    def formatting_func(example):
-        return example["text"]
 
     trainer = SFTTrainer(
         model=model,
@@ -125,20 +157,20 @@ def fine_tune(model, tokenizer, dataset_split):
 
 
 # ─────────────────────────────────────────────
-# STEP 4: Evaluate all checkpoints
+# STEP 4: Evaluate All Checkpoints
 # ─────────────────────────────────────────────
-def evaluate_all_checkpoints(tokenizer):
+def evaluate_all_checkpoints(tokenizer, model_name, checkpoint_dir, results_dir):
     print("\n" + "="*50)
     print("STEP 4: Evaluating All Checkpoints")
     print("="*50)
 
     all_results = []
 
-    # -- Evaluate base model first (step 0) --
+    # Evaluate base model first
     print("\n📊 Evaluating base model (step 0)...")
     base_model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float16,
+        model_name,
+        dtype=torch.float16,
         device_map=DEVICE
     )
     result = evaluate_checkpoint(base_model, tokenizer, step=0)
@@ -146,63 +178,48 @@ def evaluate_all_checkpoints(tokenizer):
     del base_model
     torch.mps.empty_cache()
 
-    # -- Evaluate each saved checkpoint --
+    # Evaluate each saved checkpoint
     checkpoints = sorted(
-        [d for d in os.listdir(CHECKPOINT_DIR) if d.startswith("checkpoint-")],
+        [d for d in os.listdir(checkpoint_dir)
+         if d.startswith("checkpoint-")],
         key=lambda x: int(x.split("-")[1])
     )
-
-    print(f"\n📂 Found {len(checkpoints)} checkpoints to evaluate")
+    print(f"\n📂 Found {len(checkpoints)} checkpoints")
 
     for ckpt in checkpoints:
-        step = int(ckpt.split("-")[1])
-        ckpt_path = os.path.join(CHECKPOINT_DIR, ckpt)
+        step      = int(ckpt.split("-")[1])
+        ckpt_path = os.path.join(checkpoint_dir, ckpt)
 
-        # Load base + LoRA adapter for this checkpoint
-        model_ckpt = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            torch_dtype=torch.float16,
+        ckpt_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            dtype=torch.float16,
             device_map=DEVICE
         )
-        model_ckpt = PeftModel.from_pretrained(model_ckpt, ckpt_path)
-
-        result = evaluate_checkpoint(model_ckpt, tokenizer, step=step)
+        ckpt_model = PeftModel.from_pretrained(ckpt_model, ckpt_path)
+        result     = evaluate_checkpoint(ckpt_model, tokenizer, step=step)
         all_results.append(result)
 
-        # Critical: free memory after each checkpoint eval
-        del model_ckpt
+        del ckpt_model
         torch.mps.empty_cache()
 
-    # -- Save results to JSON --
-    results_path = os.path.join(RESULTS_DIR, "safety_drift_results.json")
-    # Remove details before saving to keep file small
-    results_to_save = [
-        {k: v for k, v in r.items() if k != "details"}
-        for r in all_results
-    ]
-
-    def make_serializable(obj):
-        """Convert numpy/torch types to native Python types for JSON."""
-        if isinstance(obj, dict):
-            return {k: make_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [make_serializable(v) for v in obj]
-        elif hasattr(obj, 'item'):
-            return obj.item()
-        else:
-            return obj
-
+    # Save results
+    results_path = os.path.join(results_dir, "safety_drift_results.json")
     with open(results_path, "w") as f:
-        json.dump(make_serializable(results_to_save), f, indent=2)
-    print(f"\n✅ Results saved to {results_path}")
-
+        json.dump(
+            make_serializable(
+                [{k: v for k, v in r.items() if k != "details"}
+                 for r in all_results]
+            ),
+            f, indent=2
+        )
+    print(f"\n✅ Results saved → {results_path}")
     return all_results
 
 
 # ─────────────────────────────────────────────
-# STEP 5: Plot safety drift curves
+# STEP 5: Plot Drift Curves
 # ─────────────────────────────────────────────
-def plot_drift_curves(all_results):
+def plot_drift_curves(all_results, results_dir, experiment_name):
     print("\n" + "="*50)
     print("STEP 5: Plotting Safety Drift Curves")
     print("="*50)
@@ -210,87 +227,116 @@ def plot_drift_curves(all_results):
     df = pd.DataFrame([
         {k: v for k, v in r.items() if k != "details"}
         for r in all_results
-    ])
-    df = df.sort_values("step").reset_index(drop=True)
+    ]).sort_values("step").reset_index(drop=True)
 
     base_refusal  = df.iloc[0]["refusal_rate"]
     base_asr      = df.iloc[0]["jailbreak_asr"]
     base_toxicity = df.iloc[0]["avg_toxicity"]
 
     fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-    fig.suptitle("Safety Drift Across Fine-Tuning Checkpoints", fontsize=14)
+    fig.suptitle(
+        f"Safety Drift — {experiment_name}",
+        fontsize=14, fontweight="bold"
+    )
 
-    # Plot 1: Refusal Rate
+    # Refusal Rate
     axes[0].plot(df["step"], df["refusal_rate"],
-                 marker="o", color="steelblue", label="Refusal Rate")
-    axes[0].axhline(base_refusal, linestyle="--",
-                    color="red", alpha=0.5, label="Base model")
-    axes[0].set_ylabel("Refusal Rate ↑ (higher = safer)")
-    axes[0].legend()
+                 marker="o", color="steelblue",
+                 linewidth=2, markersize=7, label="Refusal Rate")
+    axes[0].axhline(base_refusal, linestyle="--", color="red",
+                    alpha=0.6, label=f"Base ({base_refusal:.2f})")
+    axes[0].axhspan(base_refusal - 0.10, base_refusal,
+                    alpha=0.1, color="orange", label="Warning zone")
+    axes[0].set_ylabel("Refusal Rate ↑", fontsize=10)
+    axes[0].set_ylim(0, 1.1)
+    axes[0].legend(fontsize=9)
     axes[0].grid(True, alpha=0.3)
 
-    # Plot 2: Jailbreak ASR
+    # Jailbreak ASR
     axes[1].plot(df["step"], df["jailbreak_asr"],
-                 marker="s", color="darkorange", label="Jailbreak ASR")
-    axes[1].axhline(base_asr, linestyle="--",
-                    color="red", alpha=0.5, label="Base model")
-    axes[1].set_ylabel("Jailbreak ASR ↓ (lower = safer)")
-    axes[1].legend()
+                 marker="s", color="darkorange",
+                 linewidth=2, markersize=7, label="Jailbreak ASR")
+    axes[1].axhline(base_asr, linestyle="--", color="red",
+                    alpha=0.6, label=f"Base ({base_asr:.2f})")
+    axes[1].axhspan(base_asr, base_asr + 0.15,
+                    alpha=0.1, color="orange", label="Warning zone")
+    axes[1].set_ylabel("Jailbreak ASR ↓", fontsize=10)
+    axes[1].set_ylim(0, 1.1)
+    axes[1].legend(fontsize=9)
     axes[1].grid(True, alpha=0.3)
 
-    # Plot 3: Toxicity
+    # Toxicity
     axes[2].plot(df["step"], df["avg_toxicity"],
-                 marker="^", color="purple", label="Avg Toxicity")
-    axes[2].axhline(base_toxicity, linestyle="--",
-                    color="red", alpha=0.5, label="Base model")
-    axes[2].set_ylabel("Avg Toxicity ↓ (lower = safer)")
-    axes[2].set_xlabel("Training Step")
-    axes[2].legend()
+                 marker="^", color="purple",
+                 linewidth=2, markersize=7, label="Avg Toxicity")
+    axes[2].axhline(base_toxicity, linestyle="--", color="red",
+                    alpha=0.6, label=f"Base ({base_toxicity:.2f})")
+    axes[2].axhspan(base_toxicity, base_toxicity + 0.05,
+                    alpha=0.1, color="orange", label="Warning zone")
+    axes[2].set_ylabel("Avg Toxicity ↓", fontsize=10)
+    axes[2].set_xlabel("Training Step", fontsize=11)
+    axes[2].legend(fontsize=9)
     axes[2].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plot_path = os.path.join(RESULTS_DIR, "safety_drift_curves.png")
+    plot_path = os.path.join(results_dir, "safety_drift_curves.png")
     plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.show()
-    print(f"✅ Plot saved to {plot_path}")
+    print(f"✅ Plot saved → {plot_path}")
 
 
 # ─────────────────────────────────────────────
-# STEP 6: Apply release gate
+# STEP 6: Release Gate
 # ─────────────────────────────────────────────
-def apply_release_gate(all_results):
+def apply_release_gate(all_results, results_dir):
     print("\n" + "="*50)
     print("STEP 6: Applying Release Gate")
     print("="*50)
 
-    flagged = check_release_gate(all_results)
+    flagged   = check_release_gate(all_results)
+    gate_path = os.path.join(results_dir, "release_gate_report.json")
 
-    gate_path = os.path.join(RESULTS_DIR, "release_gate_report.json")
     with open(gate_path, "w") as f:
-        json.dump(flagged, f, indent=2)
+        json.dump(make_serializable(flagged), f, indent=2)
 
-    print(f"\n✅ Gate report saved to {gate_path}")
-    print(f"   Flagged checkpoints : {len(flagged)}")
-    print(f"   Safe checkpoints    : {len(all_results) - 1 - len(flagged)}")
+    print(f"\n✅ Gate report saved → {gate_path}")
+    print(f"   Flagged  : {len(flagged)}")
+    print(f"   Safe     : {len(all_results) - 1 - len(flagged)}")
 
 
 # ─────────────────────────────────────────────
-# MAIN ENTRY POINT
+# MAIN
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n🔬 Safety Drift Study — Starting Pipeline")
-    print(f"   Model  : {MODEL_NAME}")
-    print(f"   Device : {DEVICE}")
-    print(f"   Epochs : {NUM_EPOCHS}")
-    print(f"   Steps  : save every {SAVE_STEPS} steps\n")
+    args        = get_config()
+    model_key   = args.model
+    dataset_key = args.dataset
+    experiment  = f"{model_key}_{dataset_key}"
 
-    # Run all steps in order
-    dataset_split        = prepare_dataset()
-    model, tokenizer     = load_model_and_tokenizer()
-    fine_tune(model, tokenizer, dataset_split)
-    all_results          = evaluate_all_checkpoints(tokenizer)
-    plot_drift_curves(all_results)
-    apply_release_gate(all_results)
+    checkpoint_dir, results_dir, logs_dir = get_experiment_dirs(
+        model_key, dataset_key
+    )
 
-    print("\n✅ Pipeline complete!")
-    print(f"   Results → {RESULTS_DIR}")
+    print("\n🔬 Safety Drift Study")
+    print(f"   Experiment : {experiment}")
+    print(f"   Model      : {MODELS[model_key]['path']}")
+    print(f"   Dataset    : {DATASETS[dataset_key]['path']}")
+    print(f"   Device     : {DEVICE}")
+    print(f"   Checkpoints: {checkpoint_dir}")
+    print(f"   Results    : {results_dir}")
+
+    dataset_split                = prepare_dataset(dataset_key)
+    model, tokenizer, model_name = load_model_and_tokenizer(model_key)
+    fine_tune(model, tokenizer, dataset_split, checkpoint_dir)
+
+    del model
+    torch.mps.empty_cache()
+
+    all_results = evaluate_all_checkpoints(
+        tokenizer, model_name, checkpoint_dir, results_dir
+    )
+    plot_drift_curves(all_results, results_dir, experiment)
+    apply_release_gate(all_results, results_dir)
+
+    print(f"\n✅ Experiment complete: {experiment}")
+    print(f"   Results → {results_dir}")
