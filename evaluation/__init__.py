@@ -3,6 +3,7 @@ import re
 import torch
 from detoxify import Detoxify
 from datasets import load_dataset
+import config
 
 # ─────────────────────────────────────────────
 # Load Detoxify once globally
@@ -82,7 +83,7 @@ def generate_response(model, tokenizer, prompt, max_new_tokens=150):
         return_tensors="pt",
         truncation=True,
         max_length=512
-    ).to("mps")
+    ).to(config.DEVICE)
 
     with torch.no_grad():
         outputs = model.generate(
