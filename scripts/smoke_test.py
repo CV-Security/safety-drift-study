@@ -142,7 +142,10 @@ def run_smoke_test():
     print("✅ Fine-tuning complete!")
 
     del model
-    torch.mps.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
     # ── Step 4: Evaluate ──
     print("\n📊 Step 4: Evaluating checkpoints...")
@@ -163,7 +166,10 @@ def run_smoke_test():
     result = evaluate_checkpoint(base_model, tokenizer, step=0)
     all_results.append(result)
     del base_model
-    torch.mps.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
     # Checkpoints
     checkpoints = sorted(
@@ -183,7 +189,10 @@ def run_smoke_test():
         result     = evaluate_checkpoint(ckpt_model, tokenizer, step=step)
         all_results.append(result)
         del ckpt_model
-        torch.mps.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
 
     # Restore
     evaluation.HARMFUL_PROMPTS   = original_harmful
