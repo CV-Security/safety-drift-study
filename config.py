@@ -96,7 +96,20 @@ LORA_TARGET_MODULES  = ["q_proj", "v_proj"]
 # ─────────────────────────────────────────────
 NUM_HARMFUL_EVAL    = 50
 NUM_JAILBREAK_EVAL  = 30
-DEVICE              = "mps"
+
+def get_device():
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        elif torch.backends.mps.is_available():
+            return "mps"
+        else:
+            return "cpu"
+    except ImportError:
+        return "cpu"
+
+DEVICE = get_device()
 
 # ─────────────────────────────────────────────
 # Safety Gate Thresholds
