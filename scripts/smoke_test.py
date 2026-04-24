@@ -185,7 +185,12 @@ def run_smoke_test():
         ckpt_model = AutoModelForCausalLM.from_pretrained(
             model_name, dtype=torch.float16, device_map=DEVICE
         )
-        ckpt_model = PeftModel.from_pretrained(ckpt_model, ckpt_path)
+        ckpt_model = PeftModel.from_pretrained(
+            ckpt_model,
+            ckpt_path,
+            is_trainable=False,
+            local_files_only=True
+        )
         result     = evaluate_checkpoint(ckpt_model, tokenizer, step=step)
         all_results.append(result)
         del ckpt_model
