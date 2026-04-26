@@ -5,11 +5,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import torch
+import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 from trl import SFTTrainer
 from datasets import load_dataset
-from evaluation import evaluate_checkpoint, check_release_gate
+from evaluation import (
+    evaluate_checkpoint, check_release_gate,
+    compute_sds, compute_drift_onset,
+    compute_drift_stability_index, classify_drift_pattern,
+    find_optimal_checkpoint
+)
 import evaluation
 from config import (
     MODELS, DATASETS, BASE_DIR, BATCH_SIZE,
@@ -17,6 +23,7 @@ from config import (
     LORA_R, LORA_ALPHA, LORA_DROPOUT,
     LORA_TARGET_MODULES, DEVICE, DATALOADER_PIN_MEMORY,
 )
+from main import evaluate_task_performance
 
 # ── Smoke test overrides ──
 SMOKE_MODEL_KEY      = "qwen1.5b"
@@ -130,6 +137,7 @@ def run_smoke_test():
         dataloader_num_workers=0,
         dataloader_pin_memory=DATALOADER_PIN_MEMORY,
     )
+
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -138,6 +146,7 @@ def run_smoke_test():
         processing_class=tokenizer,
         formatting_func=formatting_func,
     )
+
     trainer.train()
     print("✅ Fine-tuning complete!")
 
@@ -164,7 +173,17 @@ def run_smoke_test():
         model_name, dtype=torch.float16, device_map=DEVICE
     )
     result = evaluate_checkpoint(base_model, tokenizer, step=0)
+
+    # Task performance
+    rouge = evaluate_task_performance(
+        base_model, tokenizer,
+        split["test"], 0, SMOKE_DATASET_KEY,
+        n_samples=5
+    )
+    result["task_rouge"] = rouge
+    result["sds"]        = 0.0
     all_results.append(result)
+
     del base_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -179,20 +198,36 @@ def run_smoke_test():
     )
     print(f"\n  Found {len(checkpoints)} smoke checkpoints")
 
+    base_result = all_results[0]
+
     for ckpt in checkpoints:
         step      = int(ckpt.split("-")[1])
         ckpt_path = os.path.join(SMOKE_CHECKPOINT_DIR, ckpt)
+
         ckpt_model = AutoModelForCausalLM.from_pretrained(
             model_name, dtype=torch.float16, device_map=DEVICE
         )
         ckpt_model = PeftModel.from_pretrained(
-            ckpt_model,
-            ckpt_path,
+            ckpt_model, ckpt_path,
             is_trainable=False,
             local_files_only=True
         )
-        result     = evaluate_checkpoint(ckpt_model, tokenizer, step=step)
+
+        result = evaluate_checkpoint(
+            ckpt_model, tokenizer, step=step
+        )
+
+        # Task performance
+        rouge = evaluate_task_performance(
+            ckpt_model, tokenizer,
+            split["test"], step, SMOKE_DATASET_KEY,
+            n_samples=5
+        )
+        result["task_rouge"] = rouge
+        result["sds"]        = compute_sds(result, base_result)
+
         all_results.append(result)
+
         del ckpt_model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -203,20 +238,43 @@ def run_smoke_test():
     evaluation.HARMFUL_PROMPTS   = original_harmful
     evaluation.JAILBREAK_PROMPTS = original_jailbreak
 
-    # ── Step 5: Results ──
+    # ── Step 5: Print Results ──
     print("\n" + "="*50)
     print("📋 SMOKE TEST RESULTS")
     print("="*50)
-    print(f"{'Step':>6} | {'Refusal':>8} | {'ASR':>8} | {'Toxicity':>10}")
-    print("-" * 42)
-    for r in all_results:
-        print(f"{r['step']:>6} | {r['refusal_rate']:>8.3f} | "
-              f"{r['jailbreak_asr']:>8.3f} | {r['avg_toxicity']:>10.4f}")
+    print(f"{'Step':>6} | {'Refusal':>8} | {'ASR':>8} | "
+          f"{'Toxicity':>10} | {'SDS':>6} | {'ROUGE-L':>8}")
+    print("-"*55)
 
+    for r in all_results:
+        print(f"{r['step']:>6} | "
+              f"{r['refusal_rate']:>8.3f} | "
+              f"{r['jailbreak_asr']:>8.3f} | "
+              f"{r['avg_toxicity']:>10.4f} | "
+              f"{r['sds']:>6.3f} | "
+              f"{r.get('task_rouge', 0):>8.4f}")
+
+    # ── Step 6: Formal Metrics ──
+    print("\n📊 Formal Metrics:")
+    onset_step, onset_sds = compute_drift_onset(all_results)
+    dsi     = compute_drift_stability_index(all_results)
+    pattern = classify_drift_pattern(all_results)
+    optimal = find_optimal_checkpoint(all_results)
+
+    print(f"   Drift Onset : "
+          f"{'step ' + str(onset_step) if onset_step else 'None'}")
+    print(f"   DSI         : {dsi:.4f}")
+    print(f"   Pattern     : {pattern['pattern']}")
+    print(f"   Optimal     : step {optimal['step']}")
+
+    # ── Step 7: Release Gate ──
     print("\n🚦 Release Gate:")
     flagged = check_release_gate(all_results)
 
-    results_path = os.path.join(SMOKE_RESULTS_DIR, "smoke_test_results.json")
+    # ── Step 8: Save ──
+    results_path = os.path.join(
+        SMOKE_RESULTS_DIR, "smoke_test_results.json"
+    )
     with open(results_path, "w") as f:
         json.dump(
             make_serializable(
@@ -232,7 +290,7 @@ def run_smoke_test():
     print(f"   Checkpoints evaluated : {len(all_results)}")
     print(f"   Flagged               : {len(flagged)}")
     print(f"   Results saved to      : {results_path}")
-    print("\n🚀 Pipeline is ready for full run via main.py")
+    print("\n🚀 Pipeline ready for full run via main.py")
 
 
 if __name__ == "__main__":
