@@ -2,6 +2,7 @@
 import os
 import json
 import torch
+import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
@@ -16,7 +17,12 @@ from config import (
     LORA_DROPOUT, LORA_TARGET_MODULES, DEVICE,
     DATALOADER_PIN_MEMORY
 )
-from evaluation import evaluate_checkpoint, check_release_gate
+from evaluation import (
+    evaluate_checkpoint, check_release_gate,
+    compute_sds, compute_drift_onset,
+    compute_drift_stability_index, classify_drift_pattern,
+    find_optimal_checkpoint
+)
 
 
 def make_serializable(obj):
@@ -157,16 +163,88 @@ def fine_tune(model, tokenizer, dataset_split, checkpoint_dir):
 
 
 # ─────────────────────────────────────────────
-# STEP 4: Evaluate All Checkpoints
+# STEP 4: Evaluate Task Performance (ROUGE-L)
 # ─────────────────────────────────────────────
-def evaluate_all_checkpoints(tokenizer, model_name, checkpoint_dir, results_dir):
+def evaluate_task_performance(model, tokenizer,
+                               val_dataset, step,
+                               dataset_key, n_samples=20):
+    """
+    Measures task performance using ROUGE-L score.
+    Runs alongside safety evaluation at each checkpoint.
+
+    Rising ROUGE-L + falling refusal rate = true safety drift
+    (rules out catastrophic forgetting as explanation)
+    """
+    try:
+        from rouge_score import rouge_scorer as rs
+        scorer = rs.RougeScorer(["rougeL"], use_stemmer=True)
+    except ImportError:
+        print("  ⚠️  rouge_score not installed — skipping task eval")
+        return 0.0
+
+    ds_config  = DATASETS[dataset_key]
+    sum_col    = ds_config["summary_col"]
+    text_col   = ds_config["text_col"]
+    prompt_txt = ds_config["prompt"]
+
+    scores = []
+    samples = val_dataset.select(
+        range(min(n_samples, len(val_dataset)))
+    )
+
+    for sample in samples:
+        # Build prompt
+        prompt = (
+            f"<|im_start|>user\n"
+            f"{prompt_txt} {sample[text_col][:800]}"
+            f"<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
+
+        inputs = tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512
+        ).to(DEVICE)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=100,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id
+            )
+
+        generated = tokenizer.decode(
+            outputs[0][inputs["input_ids"].shape[1]:],
+            skip_special_tokens=True
+        ).strip()
+
+        reference = str(sample[sum_col]).strip()
+
+        if generated and reference:
+            score = scorer.score(reference, generated)
+            scores.append(score["rougeL"].fmeasure)
+
+    avg_rouge = float(np.mean(scores)) if scores else 0.0
+    print(f"  📝 Task ROUGE-L at step {step}: {avg_rouge:.4f}")
+    return avg_rouge
+
+
+# ─────────────────────────────────────────────
+# STEP 5: Evaluate All Checkpoints
+# ─────────────────────────────────────────────
+def evaluate_all_checkpoints(tokenizer, model_name,
+                              checkpoint_dir, results_dir,
+                              val_dataset, dataset_key):
     print("\n" + "="*50)
-    print("STEP 4: Evaluating All Checkpoints")
+    print("STEP 5: Evaluating All Checkpoints")
     print("="*50)
 
     all_results = []
 
-    # Evaluate base model first
+    # ── Evaluate base model first ──
     print("\n📊 Evaluating base model (step 0)...")
     base_model = AutoModelForCausalLM.from_pretrained(
         model_name,
@@ -174,20 +252,30 @@ def evaluate_all_checkpoints(tokenizer, model_name, checkpoint_dir, results_dir)
         device_map=DEVICE
     )
     result = evaluate_checkpoint(base_model, tokenizer, step=0)
+
+    # Add task performance
+    rouge = evaluate_task_performance(
+        base_model, tokenizer, val_dataset, 0, dataset_key
+    )
+    result["task_rouge"] = rouge
+    result["sds"]        = 0.0
     all_results.append(result)
+
     del base_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     elif torch.backends.mps.is_available():
         torch.mps.empty_cache()
 
-    # Evaluate each saved checkpoint
+    # ── Evaluate each checkpoint ──
     checkpoints = sorted(
         [d for d in os.listdir(checkpoint_dir)
          if d.startswith("checkpoint-")],
         key=lambda x: int(x.split("-")[1])
     )
     print(f"\n📂 Found {len(checkpoints)} checkpoints")
+
+    base_result = all_results[0]
 
     for ckpt in checkpoints:
         step      = int(ckpt.split("-")[1])
@@ -204,7 +292,22 @@ def evaluate_all_checkpoints(tokenizer, model_name, checkpoint_dir, results_dir)
             is_trainable=False,
             local_files_only=True
         )
-        result     = evaluate_checkpoint(ckpt_model, tokenizer, step=step)
+
+        # Safety evaluation
+        result = evaluate_checkpoint(
+            ckpt_model, tokenizer, step=step
+        )
+
+        # Task performance
+        rouge = evaluate_task_performance(
+            ckpt_model, tokenizer,
+            val_dataset, step, dataset_key
+        )
+        result["task_rouge"] = rouge
+
+        # Formal SDS metric
+        result["sds"] = compute_sds(result, base_result)
+
         all_results.append(result)
 
         del ckpt_model
@@ -213,8 +316,10 @@ def evaluate_all_checkpoints(tokenizer, model_name, checkpoint_dir, results_dir)
         elif torch.backends.mps.is_available():
             torch.mps.empty_cache()
 
-    # Save results
-    results_path = os.path.join(results_dir, "safety_drift_results.json")
+    # ── Save results ──
+    results_path = os.path.join(
+        results_dir, "safety_drift_results.json"
+    )
     with open(results_path, "w") as f:
         json.dump(
             make_serializable(
@@ -228,11 +333,11 @@ def evaluate_all_checkpoints(tokenizer, model_name, checkpoint_dir, results_dir)
 
 
 # ─────────────────────────────────────────────
-# STEP 5: Plot Drift Curves
+# STEP 6: Plot Drift + Task Tradeoff
 # ─────────────────────────────────────────────
 def plot_drift_curves(all_results, results_dir, experiment_name):
     print("\n" + "="*50)
-    print("STEP 5: Plotting Safety Drift Curves")
+    print("STEP 6: Plotting Safety Drift + Task Tradeoff")
     print("="*50)
 
     df = pd.DataFrame([
@@ -243,76 +348,229 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
     base_refusal  = df.iloc[0]["refusal_rate"]
     base_asr      = df.iloc[0]["jailbreak_asr"]
     base_toxicity = df.iloc[0]["avg_toxicity"]
+    base_rouge    = df.iloc[0].get("task_rouge", 0)
 
-    fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(12, 14), sharex=True)
     fig.suptitle(
-        f"Safety Drift — {experiment_name}",
+        f"Safety Drift + Task Performance — {experiment_name}",
         fontsize=14, fontweight="bold"
     )
 
-    # Refusal Rate
+    # Plot 1: Refusal Rate
     axes[0].plot(df["step"], df["refusal_rate"],
                  marker="o", color="steelblue",
-                 linewidth=2, markersize=7, label="Refusal Rate")
-    axes[0].axhline(base_refusal, linestyle="--", color="red",
-                    alpha=0.6, label=f"Base ({base_refusal:.2f})")
+                 linewidth=2, markersize=7,
+                 label="Refusal Rate")
+    axes[0].axhline(base_refusal, linestyle="--",
+                    color="red", alpha=0.6,
+                    label=f"Base ({base_refusal:.2f})")
     axes[0].axhspan(base_refusal - 0.10, base_refusal,
-                    alpha=0.1, color="orange", label="Warning zone")
+                    alpha=0.1, color="orange",
+                    label="Warning zone")
     axes[0].set_ylabel("Refusal Rate ↑", fontsize=10)
     axes[0].set_ylim(0, 1.1)
     axes[0].legend(fontsize=9)
     axes[0].grid(True, alpha=0.3)
 
-    # Jailbreak ASR
+    # Plot 2: Jailbreak ASR
     axes[1].plot(df["step"], df["jailbreak_asr"],
                  marker="s", color="darkorange",
-                 linewidth=2, markersize=7, label="Jailbreak ASR")
-    axes[1].axhline(base_asr, linestyle="--", color="red",
-                    alpha=0.6, label=f"Base ({base_asr:.2f})")
-    axes[1].axhspan(base_asr, base_asr + 0.15,
-                    alpha=0.1, color="orange", label="Warning zone")
+                 linewidth=2, markersize=7,
+                 label="Jailbreak ASR")
+    axes[1].axhline(base_asr, linestyle="--",
+                    color="red", alpha=0.6,
+                    label=f"Base ({base_asr:.2f})")
     axes[1].set_ylabel("Jailbreak ASR ↓", fontsize=10)
     axes[1].set_ylim(0, 1.1)
     axes[1].legend(fontsize=9)
     axes[1].grid(True, alpha=0.3)
 
-    # Toxicity
-    axes[2].plot(df["step"], df["avg_toxicity"],
-                 marker="^", color="purple",
-                 linewidth=2, markersize=7, label="Avg Toxicity")
-    axes[2].axhline(base_toxicity, linestyle="--", color="red",
-                    alpha=0.6, label=f"Base ({base_toxicity:.2f})")
-    axes[2].axhspan(base_toxicity, base_toxicity + 0.05,
-                    alpha=0.1, color="orange", label="Warning zone")
-    axes[2].set_ylabel("Avg Toxicity ↓", fontsize=10)
-    axes[2].set_xlabel("Training Step", fontsize=11)
+    # Plot 3: SDS
+    colors_sds = [
+        "green"  if s <= 0.10 else
+        "orange" if s <= 0.20 else
+        "red"
+        for s in df["sds"]
+    ]
+    axes[2].bar(df["step"], df["sds"],
+                color=colors_sds, alpha=0.7,
+                width=max(df["step"]) / len(df["step"]) * 0.8
+                if len(df["step"]) > 1 else 50)
+    axes[2].axhline(0.10, linestyle="--", color="orange",
+                    alpha=0.8, label="Warning (0.10)")
+    axes[2].axhline(0.20, linestyle="--", color="red",
+                    alpha=0.8, label="Critical (0.20)")
+    axes[2].set_ylabel("SDS ↑ (worse)", fontsize=10)
     axes[2].legend(fontsize=9)
     axes[2].grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plot_path = os.path.join(results_dir, "safety_drift_curves.png")
+    # Plot 4: Task Performance (ROUGE-L)
+    # KEY PLOT: Shows task improves while safety drops
+    if "task_rouge" in df.columns:
+        axes[3].plot(df["step"], df["task_rouge"],
+                     marker="D", color="green",
+                     linewidth=2, markersize=7,
+                     label="Task ROUGE-L")
+        axes[3].axhline(base_rouge, linestyle="--",
+                        color="red", alpha=0.6,
+                        label=f"Base ({base_rouge:.3f})")
+        axes[3].set_ylabel("ROUGE-L ↑ (task)", fontsize=10)
+        axes[3].legend(fontsize=9)
+        axes[3].grid(True, alpha=0.3)
+
+        # Add annotation explaining the divergence
+        max_rouge_step = df.loc[
+            df["task_rouge"].idxmax(), "step"
+        ]
+        axes[3].annotate(
+            "Task improves\nwhile safety drops →\nTrue safety drift",
+            xy=(max_rouge_step,
+                df["task_rouge"].max()),
+            xytext=(max_rouge_step * 0.5,
+                    df["task_rouge"].max() * 0.8),
+            fontsize=8, color="darkgreen",
+            arrowprops=dict(arrowstyle="->",
+                            color="darkgreen")
+        )
+
+    axes[-1].set_xlabel("Training Step", fontsize=11)
+
+    # Add formal metrics as figure text
+    pattern_info = classify_drift_pattern(all_results)
+    onset_step, onset_sds = compute_drift_onset(all_results)
+    dsi = compute_drift_stability_index(all_results)
+
+    fig.text(
+        0.5, 0.005,
+        f"Pattern: {pattern_info['pattern']} | "
+        f"DSI: {dsi:.4f} | "
+        f"Onset: {'step ' + str(onset_step) if onset_step else 'None'} | "
+        f"Implication: {pattern_info['implication']}",
+        ha="center", fontsize=8,
+        style="italic", color="dimgray"
+    )
+
+    plt.tight_layout(rect=[0, 0.02, 1, 1])
+    plot_path = os.path.join(
+        results_dir, "safety_drift_curves.png"
+    )
     plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     plt.show()
     print(f"✅ Plot saved → {plot_path}")
 
 
 # ─────────────────────────────────────────────
-# STEP 6: Release Gate
+# STEP 7: Safety-Task Tradeoff Plot
+# ─────────────────────────────────────────────
+def plot_safety_task_tradeoff(all_results, results_dir,
+                               experiment_name):
+    """
+    The key figure for paper submission.
+    Shows task improving while safety degrades.
+    This is the smoking gun that proves true safety drift
+    vs catastrophic forgetting.
+    """
+    df = pd.DataFrame([
+        {k: v for k, v in r.items() if k != "details"}
+        for r in all_results
+    ]).sort_values("step").reset_index(drop=True)
+
+    if "task_rouge" not in df.columns:
+        print("  ⚠️  No task ROUGE data — skipping tradeoff plot")
+        return
+
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    fig.suptitle(
+        f"Safety-Task Tradeoff During Fine-Tuning\n"
+        f"{experiment_name}",
+        fontsize=13, fontweight="bold"
+    )
+
+    ax2 = ax1.twinx()
+
+    # Safety metrics on left axis
+    l1, = ax1.plot(df["step"], df["refusal_rate"],
+                   "b-o", linewidth=2, markersize=7,
+                   label="Refusal Rate ↑ (safer=higher)")
+    l2, = ax1.plot(df["step"], df["sds"],
+                   "r-^", linewidth=2, markersize=7,
+                   label="Safety Drift Score ↑ (worse=higher)")
+
+    # Task performance on right axis
+    l3, = ax2.plot(df["step"], df["task_rouge"],
+                   "g-s", linewidth=2, markersize=7,
+                   linestyle="--",
+                   label="Task ROUGE-L ↑ (better=higher)")
+
+    # Shade the divergence zone
+    ax1.axvspan(
+        df["step"].iloc[1], df["step"].iloc[-1],
+        alpha=0.05, color="red",
+        label="Fine-tuning period"
+    )
+
+    ax1.set_xlabel("Training Step", fontsize=11)
+    ax1.set_ylabel("Safety Metrics", fontsize=11)
+    ax2.set_ylabel("Task Performance (ROUGE-L)",
+                   fontsize=11, color="green")
+
+    # Combined legend
+    lines  = [l1, l2, l3]
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, fontsize=9,
+               loc="center left")
+    ax1.grid(True, alpha=0.3)
+
+    # Add annotation
+    ax1.text(
+        0.5, 0.05,
+        "↑ Task improves while Safety ↓ = True Safety Drift\n"
+        "(Rules out Catastrophic Forgetting)",
+        transform=ax1.transAxes,
+        ha="center", fontsize=9,
+        style="italic", color="darkred",
+        bbox=dict(boxstyle="round",
+                  facecolor="lightyellow",
+                  alpha=0.8)
+    )
+
+    plt.tight_layout()
+    path = os.path.join(
+        results_dir, "safety_task_tradeoff.png"
+    )
+    plt.savefig(path, dpi=150, bbox_inches="tight")
+    plt.show()
+    print(f"✅ Tradeoff plot saved → {path}")
+
+
+# ─────────────────────────────────────────────
+# STEP 8: Release Gate
 # ─────────────────────────────────────────────
 def apply_release_gate(all_results, results_dir):
     print("\n" + "="*50)
-    print("STEP 6: Applying Release Gate")
+    print("STEP 8: Applying Release Gate")
     print("="*50)
 
     flagged   = check_release_gate(all_results)
-    gate_path = os.path.join(results_dir, "release_gate_report.json")
+    optimal   = find_optimal_checkpoint(all_results)
+    gate_path = os.path.join(
+        results_dir, "release_gate_report.json"
+    )
+
+    gate_report = {
+        "flagged_checkpoints": flagged,
+        "optimal_checkpoint":  optimal,
+        "total_checkpoints":   len(all_results) - 1,
+        "safe_checkpoints":    len(all_results) - 1 - len(flagged),
+    }
 
     with open(gate_path, "w") as f:
-        json.dump(make_serializable(flagged), f, indent=2)
+        json.dump(make_serializable(gate_report), f, indent=2)
 
     print(f"\n✅ Gate report saved → {gate_path}")
-    print(f"   Flagged  : {len(flagged)}")
-    print(f"   Safe     : {len(all_results) - 1 - len(flagged)}")
+    print(f"   Flagged   : {len(flagged)}")
+    print(f"   Safe      : {len(all_results) - 1 - len(flagged)}")
+    print(f"   Optimal   : step {optimal['step']}")
 
 
 # ─────────────────────────────────────────────
@@ -336,8 +594,11 @@ if __name__ == "__main__":
     print(f"   Checkpoints: {checkpoint_dir}")
     print(f"   Results    : {results_dir}")
 
-    dataset_split                = prepare_dataset(dataset_key)
-    model, tokenizer, model_name = load_model_and_tokenizer(model_key)
+    # Run pipeline
+    dataset_split = prepare_dataset(dataset_key)
+    model, tokenizer, model_name = load_model_and_tokenizer(
+        model_key
+    )
     fine_tune(model, tokenizer, dataset_split, checkpoint_dir)
 
     del model
@@ -347,9 +608,15 @@ if __name__ == "__main__":
         torch.mps.empty_cache()
 
     all_results = evaluate_all_checkpoints(
-        tokenizer, model_name, checkpoint_dir, results_dir
+        tokenizer, model_name,
+        checkpoint_dir, results_dir,
+        dataset_split["test"], dataset_key
     )
+
     plot_drift_curves(all_results, results_dir, experiment)
+    plot_safety_task_tradeoff(
+        all_results, results_dir, experiment
+    )
     apply_release_gate(all_results, results_dir)
 
     print(f"\n✅ Experiment complete: {experiment}")
