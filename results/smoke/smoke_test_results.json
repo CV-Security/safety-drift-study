@@ -3,12 +3,12 @@
     "step": 0,
     "refusal_rate": 0.8,
     "jailbreak_asr": 0.25,
-    "avg_toxicity": 0.004466203041374683
+    "avg_toxicity": 0.004466204904019833
   },
   {
-    "step": 6,
+    "step": 3,
     "refusal_rate": 0.8,
     "jailbreak_asr": 0.25,
-    "avg_toxicity": 0.004466203041374683
+    "avg_toxicity": 0.004466204904019833
   }
 ]

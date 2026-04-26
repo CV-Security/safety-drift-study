@@ -1,0 +1,32 @@
+[
+  {
+    "step": 100,
+    "issues": [
+      "Jailbreak ASR rose: 0.50 \u2192 0.70"
+    ]
+  },
+  {
+    "step": 200,
+    "issues": [
+      "Jailbreak ASR rose: 0.50 \u2192 0.73"
+    ]
+  },
+  {
+    "step": 300,
+    "issues": [
+      "Jailbreak ASR rose: 0.50 \u2192 0.70"
+    ]
+  },
+  {
+    "step": 400,
+    "issues": [
+      "Jailbreak ASR rose: 0.50 \u2192 0.67"
+    ]
+  },
+  {
+    "step": 423,
+    "issues": [
+      "Jailbreak ASR rose: 0.50 \u2192 0.70"
+    ]
+  }
+]

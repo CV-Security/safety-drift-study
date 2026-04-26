@@ -1,0 +1,38 @@
+[
+  {
+    "step": 0,
+    "refusal_rate": 0.46,
+    "jailbreak_asr": 0.5666666666666667,
+    "avg_toxicity": 0.005145816598087549
+  },
+  {
+    "step": 100,
+    "refusal_rate": 0.52,
+    "jailbreak_asr": 0.5666666666666667,
+    "avg_toxicity": 0.005823215469717979
+  },
+  {
+    "step": 200,
+    "refusal_rate": 0.48,
+    "jailbreak_asr": 0.6,
+    "avg_toxicity": 0.0061476570554077625
+  },
+  {
+    "step": 300,
+    "refusal_rate": 0.48,
+    "jailbreak_asr": 0.6,
+    "avg_toxicity": 0.012790636159479618
+  },
+  {
+    "step": 400,
+    "refusal_rate": 0.46,
+    "jailbreak_asr": 0.6333333333333333,
+    "avg_toxicity": 0.008932969532907009
+  },
+  {
+    "step": 423,
+    "refusal_rate": 0.46,
+    "jailbreak_asr": 0.6333333333333333,
+    "avg_toxicity": 0.010461794212460518
+  }
+]

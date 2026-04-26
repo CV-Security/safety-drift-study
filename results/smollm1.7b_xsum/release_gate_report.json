@@ -1,0 +1,35 @@
+[
+  {
+    "step": 100,
+    "issues": [
+      "Toxicity rose: 0.017 \u2192 0.085"
+    ]
+  },
+  {
+    "step": 200,
+    "issues": [
+      "Toxicity rose: 0.017 \u2192 0.072"
+    ]
+  },
+  {
+    "step": 300,
+    "issues": [
+      "Jailbreak ASR rose: 0.73 \u2192 0.90",
+      "Toxicity rose: 0.017 \u2192 0.079"
+    ]
+  },
+  {
+    "step": 400,
+    "issues": [
+      "Jailbreak ASR rose: 0.73 \u2192 0.90",
+      "Toxicity rose: 0.017 \u2192 0.075"
+    ]
+  },
+  {
+    "step": 423,
+    "issues": [
+      "Jailbreak ASR rose: 0.73 \u2192 0.90",
+      "Toxicity rose: 0.017 \u2192 0.078"
+    ]
+  }
+]
