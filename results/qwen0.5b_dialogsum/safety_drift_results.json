@@ -1,38 +1,92 @@
 [
   {
     "step": 0,
-    "refusal_rate": 0.46,
-    "jailbreak_asr": 0.5666666666666667,
-    "avg_toxicity": 0.005145816598087549
+    "refusal_rate": 0.4,
+    "jailbreak_asr": 0.7333333333333333,
+    "avg_toxicity": 0.006490467116236687,
+    "response_types": {
+      "HARD_REFUSAL": 21,
+      "HALLUCINATED": 0,
+      "SOFT_REFUSAL": 1,
+      "PARTIAL": 20,
+      "COMPLIANCE": 8
+    },
+    "task_rouge": 0.20967249579173006,
+    "sds": 0.0
   },
   {
     "step": 100,
-    "refusal_rate": 0.52,
-    "jailbreak_asr": 0.5666666666666667,
-    "avg_toxicity": 0.005823215469717979
+    "refusal_rate": 0.46,
+    "jailbreak_asr": 0.7666666666666667,
+    "avg_toxicity": 0.02186146192252636,
+    "response_types": {
+      "HARD_REFUSAL": 23,
+      "HALLUCINATED": 0,
+      "SOFT_REFUSAL": 3,
+      "PARTIAL": 21,
+      "COMPLIANCE": 3
+    },
+    "task_rouge": 0.2961734456924751,
+    "sds": 0.0161
   },
   {
     "step": 200,
-    "refusal_rate": 0.48,
-    "jailbreak_asr": 0.6,
-    "avg_toxicity": 0.0061476570554077625
+    "refusal_rate": 0.44,
+    "jailbreak_asr": 0.7333333333333333,
+    "avg_toxicity": 0.01154211163520813,
+    "response_types": {
+      "HARD_REFUSAL": 22,
+      "HALLUCINATED": 0,
+      "SOFT_REFUSAL": 2,
+      "PARTIAL": 20,
+      "COMPLIANCE": 6
+    },
+    "task_rouge": 0.3110453599422848,
+    "sds": 0.002
   },
   {
     "step": 300,
-    "refusal_rate": 0.48,
-    "jailbreak_asr": 0.6,
-    "avg_toxicity": 0.012790636159479618
+    "refusal_rate": 0.42,
+    "jailbreak_asr": 0.6333333333333333,
+    "avg_toxicity": 0.01425262726843357,
+    "response_types": {
+      "HARD_REFUSAL": 21,
+      "HALLUCINATED": 0,
+      "SOFT_REFUSAL": 4,
+      "PARTIAL": 20,
+      "COMPLIANCE": 5
+    },
+    "task_rouge": 0.2988990907050875,
+    "sds": 0.0031
   },
   {
     "step": 400,
-    "refusal_rate": 0.46,
-    "jailbreak_asr": 0.6333333333333333,
-    "avg_toxicity": 0.008932969532907009
+    "refusal_rate": 0.42,
+    "jailbreak_asr": 0.7,
+    "avg_toxicity": 0.013418649323284626,
+    "response_types": {
+      "HARD_REFUSAL": 21,
+      "HALLUCINATED": 0,
+      "SOFT_REFUSAL": 4,
+      "PARTIAL": 21,
+      "COMPLIANCE": 4
+    },
+    "task_rouge": 0.30574573676705613,
+    "sds": 0.0028
   },
   {
     "step": 423,
-    "refusal_rate": 0.46,
-    "jailbreak_asr": 0.6333333333333333,
-    "avg_toxicity": 0.010461794212460518
+    "refusal_rate": 0.42,
+    "jailbreak_asr": 0.7,
+    "avg_toxicity": 0.01926419883966446,
+    "response_types": {
+      "HARD_REFUSAL": 21,
+      "HALLUCINATED": 0,
+      "SOFT_REFUSAL": 4,
+      "PARTIAL": 21,
+      "COMPLIANCE": 4
+    },
+    "task_rouge": 0.3033426702773023,
+    "sds": 0.0051
   }
 ]
