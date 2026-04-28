@@ -358,11 +358,11 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
 
     # Plot 1: Refusal Rate
     axes[0].plot(df["step"], df["refusal_rate"],
-                 marker="o", color="steelblue",
+                 marker="o", color="#0072B2",
                  linewidth=2, markersize=7,
                  label="Refusal Rate")
     axes[0].axhline(base_refusal, linestyle="--",
-                    color="red", alpha=0.6,
+                    color="#888888", alpha=0.7,
                     label=f"Base ({base_refusal:.2f})")
     axes[0].axhspan(base_refusal - 0.10, base_refusal,
                     alpha=0.1, color="orange",
@@ -374,7 +374,7 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
 
     # Plot 2: Jailbreak ASR
     axes[1].plot(df["step"], df["jailbreak_asr"],
-                 marker="s", color="darkorange",
+                 marker="s", color="#D55E00",
                  linewidth=2, markersize=7,
                  label="Jailbreak ASR")
     axes[1].axhline(base_asr, linestyle="--",
@@ -387,19 +387,20 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
 
     # Plot 3: SDS
     colors_sds = [
-        "green"  if s <= 0.10 else
-        "orange" if s <= 0.20 else
-        "red"
+        "#B3DDD1" if s == 0.0 else
+        "#B3DDD1" if s <= 0.10 else
+        "#EDB8CE" if s <= 0.20 else
+        "#D55E00"
         for s in df["sds"]
     ]
     axes[2].bar(df["step"], df["sds"],
                 color=colors_sds, alpha=0.7,
                 width=max(df["step"]) / len(df["step"]) * 0.8
                 if len(df["step"]) > 1 else 50)
-    axes[2].axhline(0.10, linestyle="--", color="orange",
-                    alpha=0.8, label="Warning (0.10)")
-    axes[2].axhline(0.20, linestyle="--", color="red",
-                    alpha=0.8, label="Critical (0.20)")
+    axes[2].axhline(0.10, linestyle="--", color="#E69F00",
+                    alpha=0.9, label="Warning (0.10)")
+    axes[2].axhline(0.20, linestyle="--", color="#D55E00",
+                    alpha=0.9, label="Critical (0.20)")
     axes[2].set_ylabel("SDS ↑ (worse)", fontsize=10)
     axes[2].legend(fontsize=9)
     axes[2].grid(True, alpha=0.3)
@@ -408,11 +409,11 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
     # KEY PLOT: Shows task improves while safety drops
     if "task_rouge" in df.columns:
         axes[3].plot(df["step"], df["task_rouge"],
-                     marker="D", color="green",
+                     marker="D", color="#009E73",
                      linewidth=2, markersize=7,
                      label="Task ROUGE-L")
         axes[3].axhline(base_rouge, linestyle="--",
-                        color="red", alpha=0.6,
+                        color="#888888", alpha=0.7,
                         label=f"Base ({base_rouge:.3f})")
         axes[3].set_ylabel("ROUGE-L ↑ (task)", fontsize=10)
         axes[3].legend(fontsize=9)
@@ -423,14 +424,17 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
             df["task_rouge"].idxmax(), "step"
         ]
         axes[3].annotate(
-            "Task improves\nwhile safety drops →\nTrue safety drift",
+            "Task improves\nwhile safety drops\n(selective drift)",
             xy=(max_rouge_step,
                 df["task_rouge"].max()),
             xytext=(max_rouge_step * 0.5,
                     df["task_rouge"].max() * 0.8),
-            fontsize=8, color="darkgreen",
+            fontsize=8, color="#005C40", style="italic",
             arrowprops=dict(arrowstyle="->",
-                            color="darkgreen")
+                            color="#005C40", lw=1.2),
+            bbox=dict(boxstyle="round,pad=0.3",
+                      facecolor="#E8F5EF",
+                      edgecolor="#80C8B0", alpha=0.95)
         )
 
     axes[-1].set_xlabel("Training Step", fontsize=11)
@@ -487,21 +491,31 @@ def plot_safety_task_tradeoff(all_results, results_dir,
     )
 
     ax2 = ax1.twinx()
+    ax2.tick_params(axis="y", labelcolor="#009E73")
 
     # Safety metrics on left axis
     l1, = ax1.plot(df["step"], df["refusal_rate"],
-                   "b-o", linewidth=2, markersize=7,
+                   color="#0072B2", marker="o",
+                   linewidth=2, markersize=7,
+                   markerfacecolor="white",
+                   markeredgewidth=1.5,
                    label="Refusal Rate ↑ (safer=higher)")
     l2, = ax1.plot(df["step"], df["sds"],
-                   "r-^", linewidth=2, markersize=7,
+                   color="#CC79A7", marker="^",
+                   linewidth=2, markersize=7,
+                   markerfacecolor="white",
+                   markeredgewidth=1.5,
+                   linestyle="-.",
                    label="Safety Drift Score ↑ (worse=higher)")
 
     # Task performance on right axis
     l3, = ax2.plot(df["step"], df["task_rouge"],
-                   "g-s", linewidth=2, markersize=7,
+                   color="#009E73", marker="s",
+                   linewidth=2, markersize=7,
+                   markerfacecolor="white",
+                   markeredgewidth=1.5,
                    linestyle="--",
                    label="Task ROUGE-L ↑ (better=higher)")
-
     # Shade the divergence zone
     ax1.axvspan(
         df["step"].iloc[1], df["step"].iloc[-1],
@@ -512,7 +526,7 @@ def plot_safety_task_tradeoff(all_results, results_dir,
     ax1.set_xlabel("Training Step", fontsize=11)
     ax1.set_ylabel("Safety Metrics", fontsize=11)
     ax2.set_ylabel("Task Performance (ROUGE-L)",
-                   fontsize=11, color="green")
+                   fontsize=11, color="#009E73")
 
     # Combined legend
     lines  = [l1, l2, l3]
@@ -524,14 +538,15 @@ def plot_safety_task_tradeoff(all_results, results_dir,
     # Add annotation
     ax1.text(
         0.5, 0.05,
-        "↑ Task improves while Safety ↓ = True Safety Drift\n"
+        "Task improves while Safety drops = True Safety Drift\n"
         "(Rules out Catastrophic Forgetting)",
         transform=ax1.transAxes,
         ha="center", fontsize=9,
-        style="italic", color="darkred",
-        bbox=dict(boxstyle="round",
-                  facecolor="lightyellow",
-                  alpha=0.8)
+        style="italic", color="#005C40",
+        bbox=dict(boxstyle="round,pad=0.3",
+                  facecolor="#E8F5EF",
+                  edgecolor="#80C8B0",
+                  alpha=0.9)
     )
 
     plt.tight_layout()
