@@ -387,16 +387,25 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
 
     # Plot 3: SDS
     colors_sds = [
-        "#B3DDD1" if s == 0.0 else
+        "#C8E0F0" if s == 0.0 else
         "#B3DDD1" if s <= 0.10 else
         "#EDB8CE" if s <= 0.20 else
         "#D55E00"
         for s in df["sds"]
     ]
-    axes[2].bar(df["step"], df["sds"],
-                color=colors_sds, alpha=0.7,
-                width=max(df["step"]) / len(df["step"]) * 0.8
-                if len(df["step"]) > 1 else 50)
+    x_pos = list(range(len(df["step"])))
+    axes[2].bar(x_pos, df["sds"],
+                color=colors_sds, width=0.6,
+                edgecolor="#888888", linewidth=0.6)
+    axes[2].set_xticks(x_pos)
+    axes[2].set_xticklabels(
+        [f'Step {s}' for s in df["step"]], fontsize=8
+    )
+    for i, s in enumerate(df["sds"]):
+        if s > 0:
+            axes[2].text(i, s + 0.003, f'{s:.3f}',
+                         ha='center', fontsize=7,
+                         color='#333333')
     axes[2].axhline(0.10, linestyle="--", color="#E69F00",
                     alpha=0.9, label="Warning (0.10)")
     axes[2].axhline(0.20, linestyle="--", color="#D55E00",
@@ -419,23 +428,7 @@ def plot_drift_curves(all_results, results_dir, experiment_name):
         axes[3].legend(fontsize=9)
         axes[3].grid(True, alpha=0.3)
 
-        # Add annotation explaining the divergence
-        max_rouge_step = df.loc[
-            df["task_rouge"].idxmax(), "step"
-        ]
-        axes[3].annotate(
-            "Task improves\nwhile safety drops\n(selective drift)",
-            xy=(max_rouge_step,
-                df["task_rouge"].max()),
-            xytext=(max_rouge_step * 0.5,
-                    df["task_rouge"].max() * 0.8),
-            fontsize=8, color="#005C40", style="italic",
-            arrowprops=dict(arrowstyle="->",
-                            color="#005C40", lw=1.2),
-            bbox=dict(boxstyle="round,pad=0.3",
-                      facecolor="#E8F5EF",
-                      edgecolor="#80C8B0", alpha=0.95)
-        )
+
 
     axes[-1].set_xlabel("Training Step", fontsize=11)
 
@@ -532,22 +525,9 @@ def plot_safety_task_tradeoff(all_results, results_dir,
     lines  = [l1, l2, l3]
     labels = [l.get_label() for l in lines]
     ax1.legend(lines, labels, fontsize=9,
-               loc="center left")
+               loc="upper right", framealpha=0.9)
     ax1.grid(True, alpha=0.3)
 
-    # Add annotation
-    ax1.text(
-        0.5, 0.05,
-        "Task improves while Safety drops = True Safety Drift\n"
-        "(Rules out Catastrophic Forgetting)",
-        transform=ax1.transAxes,
-        ha="center", fontsize=9,
-        style="italic", color="#005C40",
-        bbox=dict(boxstyle="round,pad=0.3",
-                  facecolor="#E8F5EF",
-                  edgecolor="#80C8B0",
-                  alpha=0.9)
-    )
 
     plt.tight_layout()
     path = os.path.join(
